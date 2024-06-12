@@ -14,7 +14,7 @@
     Nom du groupe ou du serveur autorisé à récupérer le mot de passe du gMSA. (Obligatoire sauf si -UseDomainComputersGroup est utilisé)
 
 .PARAMETER UseDomainComputersGroup
-    Switch optionnel pour utiliser le groupe "Domain Computers" comme principal autorisé.
+    Switch optionnel pour utiliser le groupe "Ordinateurs du domaine" comme principal autorisé.
 
 .PARAMETER ServiceNames
     Liste des noms de service pour lesquels les SPN doivent être enregistrés, séparés par des virgules. Accepte les valeurs suivantes :
@@ -33,9 +33,9 @@
     Nom du domaine. (Obligatoire)
 
 .EXAMPLE
-    New-gMSA -ServiceAccountName "MyGmsaAccount" -ServerName "Server1" -UseDomainComputersGroup -ServiceNames "HTTP,LDAP" -DomainName "yourdomain.com"
+    New-gMSA -ServiceAccountName "MyGmsaAccount" -ServerName "Server1" -UseDomainComputersGroup -ServiceNames "HTTP,HOST" -DomainName "yourdomain.com"
 
-    Crée un gMSA nommé "MyGmsaAccount", autorise tous les ordinateurs du domaine à récupérer le mot de passe, et enregistre les SPN pour les services HTTP et LDAP sur le serveur "Server1" dans le domaine "yourdomain.com".
+    Crée un gMSA nommé "MyGmsaAccount", autorise tous les ordinateurs du domaine à récupérer le mot de passe, et enregistre les SPN pour les services HTTP et HOST sur le serveur "Server1" dans le domaine "yourdomain.com".
 
 #>
 
@@ -124,23 +124,40 @@ function New-gMSA {
 
     # Déterminer le principal autorisé
     if ($UseDomainComputersGroup) {
-        $principal = "Domain Computers"
+        $principal = Get-ADGroup -Filter { Name -eq "Ordinateurs du domaine" }
+        if (-not $principal) {
+            Write-Host "Erreur : Le groupe 'Ordinateurs du domaine' n'a pas été trouvé." -ForegroundColor Red
+            if ($transcribing) { Stop-Transcript }
+            exit 1
+        }
+        $principal = $principal.DistinguishedName
     } else {
         $principal = $AuthorizedPrincipal
+    }
+
+    # Valider les noms de service
+    $validServices = @("HTTP", "HOST", "LDAP", "MSSQLSvc", "GC", "RPC", "WSMAN")
+    $ServiceNameList = $ServiceNames -split ","
+    foreach ($ServiceName in $ServiceNameList) {
+        $ServiceName = $ServiceName.Trim()
+        if ($validServices -notcontains $ServiceName) {
+            Write-Host "Erreur : Le service $ServiceName n'est pas valide. Les services valides sont: HTTP, HOST, LDAP, MSSQLSvc, GC, RPC, WSMAN." -ForegroundColor Red
+            if ($transcribing) { Stop-Transcript }
+            exit 1
+        }
     }
 
     # Créer un nouveau gMSA
     Write-Host "Creating gMSA $ServiceAccountName with DNSHostName $ServiceAccountName.$DomainName and PrincipalsAllowedToRetrieveManagedPassword $principal."
     New-ADServiceAccount -Name $ServiceAccountName -DNSHostName "$ServiceAccountName.$DomainName" -PrincipalsAllowedToRetrieveManagedPassword $principal
 
-    # Ajouter le serveur au gMSA si le principal autorisé n'est pas "Domain Computers"
+    # Ajouter le serveur au gMSA si le principal autorisé n'est pas "Ordinateurs du domaine"
     if (-not $UseDomainComputersGroup) {
         Write-Host "Adding $AuthorizedPrincipal to the gMSA $ServiceAccountName."
         Add-ADComputerServiceAccount -Identity $AuthorizedPrincipal -ServiceAccount $ServiceAccountName
     }
 
     # Enregistrer les SPN pour le gMSA
-    $ServiceNameList = $ServiceNames -split ","
     foreach ($ServiceName in $ServiceNameList) {
         $ServiceName = $ServiceName.Trim()
         if (-not $UseDomainComputersGroup) {
@@ -162,12 +179,12 @@ function New-gMSA {
 if ($PSCmdlet.MyInvocation.BoundParameters.Count -eq 0) {
     # Demande des valeurs de paramètres à l'utilisateur
     $ServiceAccountName = Read-Host "Enter the Service Account Name"
-    $UseDomainComputersGroup = Read-Host "Use Domain Computers Group? (yes/no)"
+    $UseDomainComputersGroup = Read-Host "Use Ordinateurs du domaine Group? (yes/no)"
     
     if ($UseDomainComputersGroup -eq "yes") {
         $UseDomainComputersGroup = $true
-        $AuthorizedPrincipal = ""
-        $ServerName = ""
+        $AuthorizedPrincipal = $null
+        $ServerName = $null
     } else {
         $UseDomainComputersGroup = $false
         $AuthorizedPrincipal = Read-Host "Enter the Authorized Principal"
